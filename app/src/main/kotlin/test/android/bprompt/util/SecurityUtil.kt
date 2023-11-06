@@ -17,7 +17,7 @@ internal object SecurityUtil {
         val paddings = KeyProperties.ENCRYPTION_PADDING_NONE
 //    val paddings = KeyProperties.ENCRYPTION_PADDING_PKCS7
     val keyAlias = BuildConfig.APPLICATION_ID + ":foo:3"
-    private var parameters: AlgorithmParameters? = null
+    private var params: AlgorithmParameters? = null
 
     fun getKeyOrCreate(): SecretKey {
         val keyStore = KeyStore.getInstance("AndroidKeyStore")
@@ -44,7 +44,11 @@ internal object SecurityUtil {
     fun deleteEntry() {
         val keyStore = KeyStore.getInstance("AndroidKeyStore")
         keyStore.load(null)
-        keyStore.deleteEntry(keyAlias)
+        try {
+            keyStore.deleteEntry(keyAlias)
+        } catch (e: Throwable) {
+            println("delete entry \"$keyAlias\" error: $e")
+        }
     }
 
     fun getCipher(): Cipher {
@@ -53,16 +57,22 @@ internal object SecurityUtil {
 
     fun encrypt(decrypted: String): ByteArray {
         val cipher = getCipher()
-        val key = getKeyOrCreate()
-        cipher.init(Cipher.ENCRYPT_MODE, key)
-        parameters = cipher.parameters
+        cipher.encryptMode()
         return cipher.doFinal(decrypted.toByteArray())
     }
 
     fun decrypt(encrypted: ByteArray): String {
         val cipher = getCipher()
-        val key = getKeyOrCreate()
-        cipher.init(Cipher.DECRYPT_MODE, key, parameters)
+        cipher.decryptMode()
         return String(cipher.doFinal(encrypted))
+    }
+
+    fun Cipher.encryptMode() {
+        init(Cipher.ENCRYPT_MODE, getKeyOrCreate())
+        params = parameters
+    }
+
+    fun Cipher.decryptMode() {
+        init(Cipher.DECRYPT_MODE, getKeyOrCreate(), params)
     }
 }

@@ -10,12 +10,19 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import test.android.bprompt.BuildConfig
+import test.android.bprompt.util.SecurityUtil.decryptMode
+import test.android.bprompt.util.SecurityUtil.encryptMode
 import javax.crypto.Cipher
 
 internal object BiometricUtil {
     sealed interface Broadcast {
         data class OnError(val code: Int) : Broadcast
-        data class OnSucceeded(val result: BiometricPrompt.AuthenticationResult) : Broadcast
+        data class OnSucceeded(val type: Type, val cipher: Cipher) : Broadcast {
+            enum class Type {
+                ENCRYPTION,
+                DECRYPTION,
+            }
+        }
     }
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
@@ -23,36 +30,50 @@ internal object BiometricUtil {
     val broadcast = _broadcast.asSharedFlow()
     val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
 
-    fun authenticate(activity: FragmentActivity) {
-        val info = BiometricPrompt.PromptInfo.Builder()
+    private fun getPromptInfo(): BiometricPrompt.PromptInfo {
+        return BiometricPrompt.PromptInfo.Builder()
             .setTitle("BiometricPrompt:${BuildConfig.APPLICATION_ID}:title")
             .setSubtitle("BiometricPrompt:${BuildConfig.APPLICATION_ID}:subtitle")
             .setAllowedAuthenticators(authenticators)
             .setConfirmationRequired(true)
             .setDeviceCredentialAllowed(true)
             .build()
-//        BiometricPrompt(activity, callback).authenticate(info)
-        val cipher = SecurityUtil.getCipher()
-        cipher.init(Cipher.ENCRYPT_MODE, SecurityUtil.getKeyOrCreate())
-        BiometricPrompt(activity, callback).authenticate(info, BiometricPrompt.CryptoObject(cipher))
     }
 
-    private val callback = object : BiometricPrompt.AuthenticationCallback() {
-        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-            scope.launch {
-                _broadcast.emit(Broadcast.OnError(code = errorCode))
+    fun authenticate(activity: FragmentActivity, type: Broadcast.OnSucceeded.Type) {
+        val cipher = SecurityUtil.getCipher()
+        when (type) {
+            Broadcast.OnSucceeded.Type.ENCRYPTION -> {
+                cipher.encryptMode()
+            }
+            Broadcast.OnSucceeded.Type.DECRYPTION -> {
+                cipher.decryptMode()
             }
         }
+        val callback = getAuthenticationCallback(type)
+        BiometricPrompt(activity, callback).authenticate(getPromptInfo(), BiometricPrompt.CryptoObject(cipher))
+    }
 
-        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-            scope.launch {
-                _broadcast.emit(Broadcast.OnSucceeded(result = result))
+    private fun getAuthenticationCallback(type: Broadcast.OnSucceeded.Type) : BiometricPrompt.AuthenticationCallback {
+        return object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                scope.launch {
+                    _broadcast.emit(Broadcast.OnError(code = errorCode))
+                }
             }
-        }
 
-        override fun onAuthenticationFailed() {
-            println("[BiometricPrompt] failed!")
-            TODO("onAuthenticationFailed")
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                scope.launch {
+                    val cryptoObject = result.cryptoObject ?: TODO("No crypto object!")
+                    val cipher = cryptoObject.cipher ?: TODO("No cipher!")
+                    _broadcast.emit(Broadcast.OnSucceeded(type = type, cipher = cipher))
+                }
+            }
+
+            override fun onAuthenticationFailed() {
+                // Called when a biometric (e.g. fingerprint, face, etc.) is presented but not recognized as belonging to the user.
+                println("biometric (e.g. fingerprint, face, etc.) is presented but not recognized")
+            }
         }
     }
 }
