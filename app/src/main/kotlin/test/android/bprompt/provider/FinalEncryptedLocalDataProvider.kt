@@ -21,6 +21,12 @@ internal class FinalEncryptedLocalDataProvider(
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(keySize)
+            .setUserAuthenticationRequired(true)
+            .setInvalidatedByBiometricEnrollment(true)
+            .setUserAuthenticationValidityDurationSeconds(10)
+//            .setUserConfirmationRequired(true)
+//            .setUserAuthenticationParameters(1, KeyProperties.AUTH_BIOMETRIC_STRONG)
+//            .setUserAuthenticationParameters(1, KeyProperties.AUTH_DEVICE_CREDENTIAL)
             .build()
         prefs = EncryptedSharedPreferences.create(
             "PreferencesFilename",
