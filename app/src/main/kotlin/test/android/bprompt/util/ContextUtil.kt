@@ -1,4 +1,4 @@
-package test.android.bprompt
+package test.android.bprompt.util
 
 import android.content.Context
 import android.widget.Toast

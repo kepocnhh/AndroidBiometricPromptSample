@@ -12,7 +12,7 @@ internal class MainActivity : AppCompatActivity() {
             BackHandler {
                 finish()
             }
-            // todo
+            MainScreen()
         }
     }
 }
