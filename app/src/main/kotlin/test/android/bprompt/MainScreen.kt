@@ -3,6 +3,7 @@ package test.android.bprompt
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.security.keystore.UserNotAuthenticatedException
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.background
@@ -33,12 +34,15 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import test.android.bprompt.provider.EncryptedLocalDataProvider
 import test.android.bprompt.provider.FinalEncryptedLocalDataProvider
+import test.android.bprompt.util.BiometricUtil
+import test.android.bprompt.util.SecurityUtil
 import test.android.bprompt.util.findActivity
 import test.android.bprompt.util.showToast
 import test.android.bprompt.util.toPaddings
 import java.security.AlgorithmParameters
 import java.security.Key
 import java.security.KeyStore
+import java.util.Date
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -61,137 +65,42 @@ private fun Button(
     )
 }
 
-private fun getSecretKey(
-    algorithm: String,
-    blocks: String,
-    paddings: String,
-): SecretKey {
-    val keyStore = KeyStore.getInstance("AndroidKeyStore")
-    keyStore.load(null)
-    val keyName = BuildConfig.APPLICATION_ID + ":master:foo"
-//    keyStore.deleteEntry(keyName); TODO(); // todo
-//    val key = keyStore.getKey(keyName, null); if (key != null) return key as SecretKey
-    val keyGenerator = KeyGenerator.getInstance(
-        algorithm,
-        keyStore.provider,
-    )
-    val purposes = KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-    val keySize = 256
-    val spec = KeyGenParameterSpec
-        .Builder(keyName, purposes)
-        .setBlockModes(blocks)
-        .setEncryptionPaddings(paddings)
-        .setKeySize(keySize)
-        .setUserAuthenticationRequired(true)
-//        .setUserConfirmationRequired(true)
-        .setInvalidatedByBiometricEnrollment(false)
-        .setUserAuthenticationValidityDurationSeconds(-1)
-        .build()
-    keyGenerator.init(spec)
-    return keyGenerator.generateKey()
-}
-
-//private var iv: ByteArray? = null
-private var parameters: AlgorithmParameters? = null
-
-private fun getCipher(
-    algorithm: String,
-    blocks: String,
-    paddings: String,
-): Cipher {
-    return Cipher.getInstance( "$algorithm/$blocks/$paddings")
-}
-
-private fun encrypt(
-    cipher: Cipher,
-    key: SecretKey,
-    decrypted: String,
-): ByteArray {
-    cipher.init(Cipher.ENCRYPT_MODE, key)
-    val encrypted = cipher.doFinal(decrypted.toByteArray())
-    parameters = cipher.parameters
-    return encrypted
-}
-
-private fun decrypt(
-    cipher: Cipher,
-    key: SecretKey,
-    encrypted: ByteArray,
-): String {
-    val parameters = checkNotNull(parameters)
-    cipher.init(Cipher.DECRYPT_MODE, key, parameters)
-    return String(cipher.doFinal(encrypted))
-}
-
-private val scope = CoroutineScope(Dispatchers.Main + Job())
-
-private sealed interface Broadcast {
-    data class OnError(val code: Int) : Broadcast
-    data class OnSucceeded(val result: BiometricPrompt.AuthenticationResult) : Broadcast
-}
-
-private val broadcast = MutableSharedFlow<Broadcast>()
-
-private val callback = object : BiometricPrompt.AuthenticationCallback() {
-    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-        scope.launch {
-            broadcast.emit(Broadcast.OnError(code = errorCode))
+private fun withBiometric(context: Context) {
+    val biometricManager = BiometricManager.from(context)
+    val status = biometricManager.canAuthenticate(BiometricUtil.authenticators)
+    when (status) {
+        BiometricManager.BIOMETRIC_SUCCESS -> {
+            val activity = context.findActivity() ?: TODO("No activity!")
+            BiometricUtil.authenticate(activity)
         }
+        else -> TODO("authenticators: ${BiometricUtil.authenticators} status: $status")
     }
+}
 
-    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-        scope.launch {
-            broadcast.emit(Broadcast.OnSucceeded(result = result))
-        }
-    }
-
-    override fun onAuthenticationFailed() {
-        println("[BiometricPrompt] failed!")
-        TODO("onAuthenticationFailed")
-    }
+private fun enc_dec(context: Context, secret: String) {
+    val encrypted = SecurityUtil.encrypt(secret)
+    context.showToast("encrypted: " + encrypted.size)
+    val decrypted = SecurityUtil.decrypt(encrypted)
+    context.showToast("decrypted: $decrypted")
 }
 
 @Composable
 internal fun MainScreen() {
     val insets = LocalView.current.rootWindowInsets.toPaddings()
     val context = LocalContext.current
-    val activity = context.findActivity() ?: TODO()
-    val biometricManager = remember { BiometricManager.from(context) }
-//    val authenticators = BiometricManager.Authenticators.DEVICE_CREDENTIAL
-//    val authenticators = BiometricManager.Authenticators.DEVICE_CREDENTIAL or BiometricManager.Authenticators.BIOMETRIC_WEAK
-//    val authenticators = BiometricManager.Authenticators.DEVICE_CREDENTIAL or BiometricManager.Authenticators.BIOMETRIC_STRONG
-    val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-    val algorithm = KeyProperties.KEY_ALGORITHM_AES
-//    val blocks = KeyProperties.BLOCK_MODE_GCM
-    val blocks = KeyProperties.BLOCK_MODE_CBC
-//    val paddings = KeyProperties.ENCRYPTION_PADDING_NONE
-    val paddings = KeyProperties.ENCRYPTION_PADDING_PKCS7
-//    val ldp: EncryptedLocalDataProvider = remember {
-//        FinalEncryptedLocalDataProvider(context)
-//    }
-    val secret = "foobar"
+    val secret = remember { "${Date()}" }
     LaunchedEffect(Unit) {
-        broadcast.collect {
+        BiometricUtil.broadcast.collect {
             when (it) {
-                is Broadcast.OnError -> {
+                is BiometricUtil.Broadcast.OnError -> {
                     TODO("on error: ${it.code}")
                 }
-                is Broadcast.OnSucceeded -> {
-                    val ldp = FinalEncryptedLocalDataProvider(context)
-                    ldp.secret = "time: " + System.currentTimeMillis()
-                    val decrypted = ldp.secret
-                    context.showToast("decrypted: $decrypted")
-//                    val cryptoObject = it.result.cryptoObject ?: TODO()
-//                    println("""
-//                        cipher: ${cryptoObject.cipher}
-//                    """.trimIndent())
-//                    val encrypted = encrypt(
-//                        algorithm = algorithm,
-//                        blocks = blocks,
-//                        paddings = paddings,
-//                        decrypted = secret,
-//                    )
-//                    context.showToast("encrypted: " + encrypted.size + " bytes")
+                is BiometricUtil.Broadcast.OnSucceeded -> {
+                    val cryptoObject = it.result.cryptoObject ?: TODO("No crypto object!")
+                    val cipher = cryptoObject.cipher ?: TODO("No cipher!")
+//                    val encrypted = SecurityUtil.encrypt(secret)
+                    val encrypted = cipher.doFinal(secret.toByteArray())
+                    context.showToast("encrypted: " + encrypted.size)
                 }
             }
         }
@@ -208,53 +117,32 @@ internal fun MainScreen() {
                 .align(Alignment.Center),
         ) {
             Button(
-                text = "encrypt",
+                text = "encrypt/decrypt",
                 onClick = {
-                    val status = biometricManager.canAuthenticate(authenticators)
-                    when (status) {
-                        BiometricManager.BIOMETRIC_SUCCESS -> {
-//                            ldp.secret = "time: " + System.currentTimeMillis()
-//                            val decrypted = ldp.secret
-//                            context.showToast("decrypted: $decrypted")
-                            val info = BiometricPrompt.PromptInfo.Builder()
-                                .setTitle("BiometricPrompt:${BuildConfig.APPLICATION_ID}:title")
-                                .setSubtitle("BiometricPrompt:${BuildConfig.APPLICATION_ID}:subtitle")
-                                .setAllowedAuthenticators(authenticators)
-                                .setConfirmationRequired(true)
-                                .setDeviceCredentialAllowed(true)
-                                .build()
-//                            val cipher = getCipher(algorithm, blocks, paddings)
-//                            val key = getSecretKey(
-//                                algorithm = algorithm,
-//                                blocks = blocks,
-//                                paddings = paddings,
-//                            )
-//                        val key: SecretKey? = null
-//                            cipher.init(Cipher.ENCRYPT_MODE, key)
-//                            BiometricPrompt(activity, callback).authenticate(info, BiometricPrompt.CryptoObject(cipher))
-                            BiometricPrompt(activity, callback).authenticate(info)
-                        }
-                        else -> TODO("authenticators: $authenticators status: $status")
+                    try {
+                        enc_dec(context = context, secret = secret)
+                    } catch (e: UserNotAuthenticatedException) {
+                        context.showToast("error: $e")
                     }
                 }
             )
             Button(
-                text = "decrypt",
+                text = "with biometric",
                 onClick = {
-                    onDecrypt(context)
-//                    val encrypted = encrypt(
-//                        algorithm = algorithm,
-//                        blocks = blocks,
-//                        paddings = paddings,
-//                        decrypted = secret,
-//                    )
-//                    val decrypted = decrypt(
-//                        algorithm = algorithm,
-//                        blocks = blocks,
-//                        paddings = paddings,
-//                        encrypted = encrypted,
-//                    )
-//                    context.showToast("decrypted: $decrypted")
+                    withBiometric(context = context)
+                }
+            )
+            Button(
+                text = "getKeyOrCreate",
+                onClick = {
+                    val key = SecurityUtil.getKeyOrCreate()
+                    context.showToast("key: ${key.hashCode()}")
+                }
+            )
+            Button(
+                text = "deleteEntry",
+                onClick = {
+                    SecurityUtil.deleteEntry()
                 }
             )
         }
